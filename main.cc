@@ -62,10 +62,43 @@ class PulseStream {
         type == record? "app_record_stream" : "app_playback_stream";
       if (!(s = pa_simple_new(NULL, "app_name", dir, NULL,
               stream_name, &ss, NULL, NULL, &error))) {
-        char * err_mess = "pa_simple_new failed for ";
+        char *err_mess = (char*)"pa_simple_new failed for ";
         err_n_exit(strcat(err_mess, stream_name));
       }
     } 
+};
+
+struct Point {
+  double x, y;
+};
+
+class Glyph {
+  public:
+    Glyph(double x, double y, double w, double h)
+      : x(x), y(y), w(w), h(h) {};
+    virtual void Draw(cairo_t *cr) =0;
+    virtual bool Intersects(const Point&) =0;
+    virtual void OnClick() =0;
+    double x, y, w, h;
+};
+
+class Button : public Glyph {
+  public:
+    using Glyph::Glyph;
+    void Draw(cairo_t *cr) {
+      cairo_set_source_rgb(cr, 0.5, 0.5, 0.5);
+      cairo_rectangle(cr, x, y, w, h);
+      cairo_fill(cr);
+    }
+    bool Intersects(const Point &p) {
+      if (p.x >= x && p.x <= x+w)
+        if (p.y >= y && p.y <= y+h)
+          return true;
+      return false;
+    }
+    void OnClick() {
+      cout << "Button click" << endl;
+    }
 };
 
 int main() {
@@ -75,20 +108,26 @@ int main() {
     .rate = 44100,
     .channels = 2 
   };
-  PulseStream record_stream(ss, record);
-  PulseStream playback_stream(ss, playback);
-  
-  for (;;) {
-    // Read in data from mic 
-    const int bufsize = 4096;
-    uint8_t buf[bufsize];
-    if (pa_simple_read(record_stream.s, buf, sizeof(buf), 
-          &record_stream.error) < 0)
-      err_n_exit("pa_simple_read failed");
+  PulseStream *record_stream = new PulseStream(ss, record);
+  Button b(100, 100, 30, 20);
 
-    // Black out background
+  const int bufsize = 4096;
+  const int seconds = 300;
+  uint8_t *song = (uint8_t*)malloc(ss.rate * seconds * sizeof(uint8_t));
+  const int nbufs = floor(seconds * (double)ss.rate / bufsize);
+  for (int i=0; i<nbufs; i++) {
+    uint8_t buf[bufsize]; 
+    
+    // Read in data from mic 
+    if (pa_simple_read(record_stream->s, buf, sizeof(buf), 
+        &record_stream->error) < 0)
+      err_n_exit("pa_simple_read failed");
+    if (memcpy(song + i * bufsize, buf, bufsize) != song + i * bufsize)
+      err_n_exit("memcpy from buf to song failed");
+
+    // Black out behind waveform
     cairo_set_source_rgb(X.cr, 0, 0, 0); 
-    cairo_rectangle(X.cr, 0, 0, X.ww, X.wh);
+    cairo_rectangle(X.cr, 0, X.wh / 6 - 5, X.ww, X.wh * 5 / 6 + 5);
     cairo_fill(X.cr);
 
     // Draw waveform
@@ -103,11 +142,18 @@ int main() {
       cairo_line_to(X.cr, j * 2, s + X.wh / 2);
     }
     cairo_stroke(X.cr);
+
+    // Draw button
+    b.Draw(X.cr);
     
     if (XPending(X.display)) {
       XEvent e;
       XNextEvent(X.display, &e);
-      switch (e.type) { 
+      switch (e.type) {
+        case ButtonPress:
+         if (b.Intersects({(double)e.xbutton.x, (double)e.xbutton.y}))
+             b.OnClick();
+         break;
         case Expose:
           X.ww = e.xexpose.width;
           X.wh = e.xexpose.height;
@@ -115,4 +161,18 @@ int main() {
       }
     }
   }
+
+  delete record_stream;
+  PulseStream playback_stream(ss, playback);
+  for (;;) {
+    for (int i=0; i<nbufs; i++) {
+      if (pa_simple_write(playback_stream.s, 
+            song + i * bufsize, bufsize,
+            &playback_stream.error) < 0)
+        err_n_exit("pa_simple_read failed");
+    }
+    if (pa_simple_drain(playback_stream.s, &playback_stream.error) < 0)
+      err_n_exit("pa_simple_drain failed");
+  }        
+  free(song);
 }
