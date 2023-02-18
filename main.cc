@@ -108,12 +108,16 @@ class Live {
     buf(_buf), bufsize(_bufsize) {}
 };
 
-class WaveformViewer : public Glyph, public Live {
+class LiveGlyph : public Glyph, public Live {
   public:
-    using Glyph::Glyph;
-    WaveformViewer(double _x, double _y, double _w, double _h,
+    LiveGlyph(double _x, double _y, double _w, double _h,
         uint8_t *_buf, int _bufsize) :
       Glyph(_x, _y, _w, _h), Live(_buf, _bufsize) {}
+};
+
+class WaveformViewer : public LiveGlyph {
+  public:
+    using LiveGlyph::LiveGlyph;
     void Draw(cairo_t *cr) {
       // Black out behind waveform
       cairo_set_source_rgb(cr, 0, 0, 0); 
@@ -136,8 +140,9 @@ class WaveformViewer : public Glyph, public Live {
     void OnClick() {}
 };
 
-class AudioClip : public Glyph, public Live {
+class AudioClip : public LiveGlyph {
   public:
+    using LiveGlyph::LiveGlyph;
     
 };
 
