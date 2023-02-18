@@ -130,20 +130,45 @@ class WaveformViewer : public LiveGlyph {
       for (double i=0; i < w / 2; i++) {
         int data_index = floor(i * bufsize / w) * 2;
         // Convert two uint8_t's to one signed 16bit (short)
-        short sample = buf[data_index] << 8 | buf[data_index] ;
+        short sample = buf[data_index] << 8 | buf[data_index+1];
         double s = sample / pow(2,15); // Scale to between -1 and 1
         s *= (h / 3);
         cairo_line_to(cr, x + i * 2, y + s + h / 2);
       }
       cairo_stroke(cr);
     } 
-    void OnClick() {}
+    void OnClick(){}
 };
 
 class AudioClip : public LiveGlyph {
   public:
-    using LiveGlyph::LiveGlyph;
-    
+    const int nbufs;
+    int curr_buf;
+    AudioClip(double _x, double _y, double _w, double _h,
+        uint8_t *_buf, int _bufsize, const int _nbufs) :
+      LiveGlyph(_x, _y, _w, _h, _buf, _bufsize), 
+      nbufs(_nbufs), curr_buf(0) {}
+    void Draw(cairo_t *cr) {
+      // Background
+      cairo_set_source_rgb(cr, 0, 0, 0.5);
+      cairo_rectangle(cr, curr_buf*w/nbufs, y, (curr_buf+1)*w/nbufs, h);
+      cairo_fill(cr);
+      
+      // Waveform
+      double max = pow(2,16);
+      int16_t high = 0, low = max;
+      for (int i=0; i<bufsize; i+=2) {
+        int16_t sample = buf[i] << 8 | buf[i+1];
+        high = sample > high? sample : high;
+        low = sample < low? sample : low;
+      }
+      cairo_set_source_rgb(cr, 1, 1, 1);
+      cairo_move_to(cr, x + curr_buf*w/nbufs, y + h/2 + h/2*high/max);
+      cairo_line_to(cr, x + curr_buf*w/nbufs, y + h/2 + h/2*low/max);
+      cairo_stroke(cr);
+      curr_buf++; 
+    }
+    void OnClick(){}
 };
 
 int main() {
@@ -159,16 +184,18 @@ int main() {
   uint8_t buf[bufsize]; 
   WaveformViewer wave1(500, 0, 500, 250, buf, bufsize);
 
+  const int seconds = 100;
+  uint8_t *song = (uint8_t*)malloc(ss.rate * seconds * sizeof(uint8_t));
+  const int nbufs = floor(seconds * (double)ss.rate / bufsize);
+  AudioClip clip1(0, 250, X.ww, 100, buf, bufsize, nbufs);
+
   // Background color
   cairo_set_source_rgb(X.cr, 0.5, 0.5, 0.5);
   cairo_rectangle(X.cr, 0, 0, X.ww, X.wh);
   cairo_fill(X.cr);
 
   // Main loop
-  const int seconds = 100;
-  uint8_t *song = (uint8_t*)malloc(ss.rate * seconds * sizeof(uint8_t));
-  const int nbufs = floor(seconds * (double)ss.rate / bufsize);
-  for (int i=0; i<nbufs; i++) {
+    for (int i=0; i<nbufs; i++) {
         
     // Read in data from mic 
     if (pa_simple_read(record_stream->s, buf, sizeof(buf), 
@@ -178,6 +205,7 @@ int main() {
       err_n_exit("memcpy from buf to song failed");
      
     wave1.Draw(X.cr);
+    clip1.Draw(X.cr);
     
     if (XPending(X.display)) {
       XEvent e;
