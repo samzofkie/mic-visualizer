@@ -151,7 +151,7 @@ class AudioClip : public LiveGlyph {
     void Draw(cairo_t *cr) {
       // Background
       cairo_set_source_rgb(cr, 0, 0, 0.5);
-      cairo_rectangle(cr, curr_buf*w/nbufs, y, (curr_buf+1)*w/nbufs, h);
+      cairo_rectangle(cr, curr_buf*w/nbufs, y, w/nbufs, h);
       cairo_fill(cr);
       
       // Waveform
@@ -166,6 +166,7 @@ class AudioClip : public LiveGlyph {
       cairo_move_to(cr, x + curr_buf*w/nbufs, y + h/2 + h/2*high/max);
       cairo_line_to(cr, x + curr_buf*w/nbufs, y + h/2 + h/2*low/max);
       cairo_stroke(cr);
+      
       curr_buf++; 
     }
     void OnClick(){}
