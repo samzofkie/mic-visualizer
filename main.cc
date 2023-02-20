@@ -140,6 +140,30 @@ class WaveformViewer : public LiveGlyph {
     void OnClick(){}
 };
 
+class AudioClip : public Glyph {
+  public:
+    int bufsize; 
+    vector<int16_t> clip;
+    AudioClip(double _x, double _y, double _w, double _h, int _bufsize) :
+      Glyph(_x, _y, _w, _h), bufsize(_bufsize), 
+      clip(0, bufsize) {}
+    void Draw(cairo_t *cr) {
+      
+    }
+    void OnClick(){}
+    void Record(PulseStream *record_stream) { 
+      vector<int16_t>::size_type prev_size = clip.size();
+      clip.resize(clip.size() + bufsize); 
+      // We do bufsize * 2 because the PulseAudio API is expecting a uint8_t array,
+      // but our vector is of int16_t, which is twice the size of a uint8_t.
+      if (pa_simple_read(record_stream->s, 
+            &clip[prev_size], bufsize*2, 
+            &record_stream->error) < 0)
+        err_n_exit("pa_simple_read failed");
+  }
+};
+
+/*
 class AudioClip : public LiveGlyph {
   public:
     const int nbufs;
@@ -170,7 +194,7 @@ class AudioClip : public LiveGlyph {
       curr_buf++; 
     }
     void OnClick(){}
-};
+};*/
 
 int main() {
   CairoXWindow X(1500, 750);
@@ -180,30 +204,20 @@ int main() {
     .channels = 2 
   };
   PulseStream *record_stream = new PulseStream(ss, record);
-
   const int bufsize = 2048;
-  vector<int16_t> clip; 
+  AudioClip clip1(25, 250, X.ww-50, 250, bufsize);
  
-  const int seconds = 5;
-  const int nbufs = floor(seconds * (double)ss.rate / bufsize);
-
   // Background color
   cairo_set_source_rgb(X.cr, 0.5, 0.5, 0.5);
   cairo_rectangle(X.cr, 0, 0, X.ww, X.wh);
   cairo_fill(X.cr);
 
+  const int seconds = 5;
+  const int nbufs = floor(seconds * (double)ss.rate / bufsize);
   // Main loop
   for (int i=0; i<nbufs; i++) {
-        
-    // Read in data from mic
-    clip.resize(clip.size() + bufsize);
-    // We do bufsize * 2 because the PulseAudio API is expecting a uint8_t array,
-    // but our vector is of int16_t, which is twice the size of a uint8_t.
-    if (pa_simple_read(record_stream->s, 
-          &clip[bufsize*i], bufsize*2, 
-          &record_stream->error) < 0)
-      err_n_exit("pa_simple_read failed");
-    
+
+    clip1.Record(record_stream);    
     if (XPending(X.display)) {
       XEvent e;
       XNextEvent(X.display, &e);
@@ -224,7 +238,7 @@ int main() {
   for (;;) {
     for (int i=0; i<nbufs; i++) {
       if (pa_simple_write(playback_stream.s, 
-            &clip[i*bufsize], bufsize*2,
+            &clip1.clip[i*bufsize], bufsize*2,
             &playback_stream.error) < 0)
         err_n_exit("pa_simple_read failed");
     }
