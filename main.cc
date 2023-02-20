@@ -175,20 +175,17 @@ class AudioClip : public LiveGlyph {
 int main() {
   CairoXWindow X(1500, 750);
   static const pa_sample_spec ss = {
-    .format = PA_SAMPLE_S16BE,
+    .format = PA_SAMPLE_S16LE,
     .rate = 44100,
     .channels = 2 
   };
   PulseStream *record_stream = new PulseStream(ss, record);
-  
-  const int bufsize = 4096;
-  uint8_t buf[bufsize]; 
-  WaveformViewer wave1(500, 0, 500, 250, buf, bufsize);
 
-  const int seconds = 100;
-  uint8_t *song = (uint8_t*)malloc(ss.rate * seconds * sizeof(uint8_t));
+  const int bufsize = 2048;
+  vector<int16_t> clip; 
+ 
+  const int seconds = 5;
   const int nbufs = floor(seconds * (double)ss.rate / bufsize);
-  AudioClip clip1(0, 250, X.ww, 100, buf, bufsize, nbufs);
 
   // Background color
   cairo_set_source_rgb(X.cr, 0.5, 0.5, 0.5);
@@ -196,17 +193,16 @@ int main() {
   cairo_fill(X.cr);
 
   // Main loop
-    for (int i=0; i<nbufs; i++) {
+  for (int i=0; i<nbufs; i++) {
         
-    // Read in data from mic 
-    if (pa_simple_read(record_stream->s, buf, sizeof(buf), 
-        &record_stream->error) < 0)
+    // Read in data from mic
+    clip.resize(clip.size() + bufsize);
+    // We do bufsize * 2 because the PulseAudio API is expecting a uint8_t array,
+    // but our vector is of int16_t, which is twice the size of a uint8_t.
+    if (pa_simple_read(record_stream->s, 
+          &clip[bufsize*i], bufsize*2, 
+          &record_stream->error) < 0)
       err_n_exit("pa_simple_read failed");
-    if (memcpy(song + i * bufsize, buf, bufsize) != song + i * bufsize)
-      err_n_exit("memcpy from buf to song failed");
-     
-    wave1.Draw(X.cr);
-    clip1.Draw(X.cr);
     
     if (XPending(X.display)) {
       XEvent e;
@@ -221,18 +217,18 @@ int main() {
       }
     }
   }
-
+  
   delete record_stream;
+
   PulseStream playback_stream(ss, playback);
   for (;;) {
     for (int i=0; i<nbufs; i++) {
       if (pa_simple_write(playback_stream.s, 
-            song + i * bufsize, bufsize,
+            &clip[i*bufsize], bufsize*2,
             &playback_stream.error) < 0)
         err_n_exit("pa_simple_read failed");
     }
     if (pa_simple_drain(playback_stream.s, &playback_stream.error) < 0)
       err_n_exit("pa_simple_drain failed");
   }        
-  free(song);
 }
