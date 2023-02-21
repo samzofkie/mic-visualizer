@@ -1,6 +1,7 @@
 #include <vector>
 #include <iostream>
 #include <cstring>
+#include <algorithm>
 #include <math.h>
 
 #include <X11/Xlib.h>
@@ -144,11 +145,25 @@ class AudioClip : public Glyph {
   public:
     int bufsize; 
     vector<int16_t> clip;
+    int drawn;
     AudioClip(double _x, double _y, double _w, double _h, int _bufsize) :
       Glyph(_x, _y, _w, _h), bufsize(_bufsize), 
-      clip(0, bufsize) {}
+      clip(0, bufsize), drawn(0) {}
     void Draw(cairo_t *cr) {
-      
+      if (drawn >= w)
+        return;
+      cairo_set_source_rgb(cr, 0, 0, 0.5);
+      cairo_rectangle(cr, x+drawn, y, 1, h);
+      cairo_fill(cr);
+      vector<int16_t>::iterator start = clip.begin() + drawn * bufsize,
+	                        end = clip.begin() + (drawn+1) * bufsize;
+      int16_t low = *min_element(start, end);
+      int16_t high = *max_element(start, end);
+      cairo_set_source_rgb(cr, 1, 1, 1);
+      cairo_move_to(cr, x+drawn+0.5, y + h/2 + h/2 * high/pow(2,16));
+      cairo_line_to(cr, x+drawn+0.5, y + h/2 + h/2 * low/pow(2,16));
+      cairo_stroke(cr);
+      drawn++;
     }
     void OnClick(){}
     void Record(PulseStream *record_stream) { 
@@ -197,27 +212,20 @@ class AudioClip : public LiveGlyph {
 };*/
 
 int main() {
-  CairoXWindow X(1500, 750);
+  CairoXWindow X(700, 350);
   static const pa_sample_spec ss = {
     .format = PA_SAMPLE_S16LE,
     .rate = 44100,
     .channels = 2 
   };
   PulseStream *record_stream = new PulseStream(ss, record);
-  const int bufsize = 2048;
-  AudioClip clip1(25, 250, X.ww-50, 250, bufsize);
- 
-  // Background color
-  cairo_set_source_rgb(X.cr, 0.5, 0.5, 0.5);
-  cairo_rectangle(X.cr, 0, 0, X.ww, X.wh);
-  cairo_fill(X.cr);
-
-  const int seconds = 5;
+  const int bufsize = 2048; 
+  const int seconds = 50;
   const int nbufs = floor(seconds * (double)ss.rate / bufsize);
-  // Main loop
+  AudioClip clip1(0, 50, X.ww, 250, bufsize);
   for (int i=0; i<nbufs; i++) {
-
-    clip1.Record(record_stream);    
+    clip1.Record(record_stream);
+    clip1.Draw(X.cr);    
     if (XPending(X.display)) {
       XEvent e;
       XNextEvent(X.display, &e);
@@ -227,6 +235,10 @@ int main() {
         case Expose:
           X.ww = e.xexpose.width;
           X.wh = e.xexpose.height;
+          // Background color
+          cairo_set_source_rgb(X.cr, 0.5, 0.5, 0.5);
+          cairo_rectangle(X.cr, 0, 0, X.ww, X.wh);
+          cairo_fill(X.cr);
           break;
       }
     }
