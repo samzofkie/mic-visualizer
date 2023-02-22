@@ -75,8 +75,8 @@ struct Point {
 
 class Glyph {
   public:
-    double x, y, w, h;
-    Glyph(double x, double y, double w, double h)
+    double x, y, &w, &h;
+    Glyph(double x, double y, double& w, double& h)
       : x(x), y(y), w(w), h(h) {};
     virtual void Draw(cairo_t *cr) =0;
     virtual bool Intersects(const Point& p) {
@@ -116,13 +116,15 @@ class LiveGlyph : public Glyph, public Live {
       Glyph(_x, _y, _w, _h), Live(_buf, _bufsize) {}
 };
 
-class WaveformViewer : public LiveGlyph {
+class WaveformViewer : public Glyph {
   public:
-    using LiveGlyph::LiveGlyph;
-    void Draw(cairo_t *cr) {
-      // Black out behind waveform
+    int16_t *buf;
+		int bufsize;
+		using Glyph::Glyph;
+	  void Draw(cairo_t *cr) {
+			// Black out behind waveform
       cairo_set_source_rgb(cr, 0, 0, 0); 
-      cairo_rectangle(cr, x-1, y, w, h);
+      cairo_rectangle(cr, x, y, w, h);
       cairo_fill(cr);
 
       // Draw waveform
@@ -130,15 +132,17 @@ class WaveformViewer : public LiveGlyph {
       cairo_move_to(cr, x, y + h / 2);
       for (double i=0; i < w / 2; i++) {
         int data_index = floor(i * bufsize / w) * 2;
-        // Convert two uint8_t's to one signed 16bit (short)
-        short sample = buf[data_index] << 8 | buf[data_index+1];
-        double s = sample / pow(2,15); // Scale to between -1 and 1
-        s *= (h / 3);
-        cairo_line_to(cr, x + i * 2, y + s + h / 2);
+   			int16_t sample = buf[data_index];
+			  double s = sample / pow(2,15) * h;	
+        cairo_line_to(cr, x+i*2, y+s+h/2);
       }
       cairo_stroke(cr);
-    } 
-    void OnClick(){}
+		}
+	  void OnClick() {}
+		void SetBuf(int16_t *_buf, int _bufsize) {
+			buf = _buf;
+			bufsize = _bufsize;
+		}	
 };
 
 class AudioClip : public Glyph {
@@ -160,8 +164,8 @@ class AudioClip : public Glyph {
       int16_t low = *min_element(start, end);
       int16_t high = *max_element(start, end);
       cairo_set_source_rgb(cr, 1, 1, 1);
-      cairo_move_to(cr, x+drawn+0.5, y + h/2 + h/2 * high/pow(2,16));
-      cairo_line_to(cr, x+drawn+0.5, y + h/2 + h/2 * low/pow(2,16));
+      cairo_move_to(cr, x+drawn+0.5, y + h/2 + h/2 * high/pow(2,15));
+      cairo_line_to(cr, x+drawn+0.5, y + h/2 + h/2 * low/pow(2,15));
       cairo_stroke(cr);
       drawn++;
     }
@@ -178,54 +182,31 @@ class AudioClip : public Glyph {
   }
 };
 
-/*
-class AudioClip : public LiveGlyph {
-  public:
-    const int nbufs;
-    int curr_buf;
-    AudioClip(double _x, double _y, double _w, double _h,
-        uint8_t *_buf, int _bufsize, const int _nbufs) :
-      LiveGlyph(_x, _y, _w, _h, _buf, _bufsize), 
-      nbufs(_nbufs), curr_buf(0) {}
-    void Draw(cairo_t *cr) {
-      // Background
-      cairo_set_source_rgb(cr, 0, 0, 0.5);
-      cairo_rectangle(cr, curr_buf*w/nbufs, y, w/nbufs, h);
-      cairo_fill(cr);
-      
-      // Waveform
-      double max = pow(2,16);
-      int16_t high = 0, low = max;
-      for (int i=0; i<bufsize; i+=2) {
-        int16_t sample = buf[i] << 8 | buf[i+1];
-        high = sample > high? sample : high;
-        low = sample < low? sample : low;
-      }
-      cairo_set_source_rgb(cr, 1, 1, 1);
-      cairo_move_to(cr, x + curr_buf*w/nbufs, y + h/2 + h/2*high/max);
-      cairo_line_to(cr, x + curr_buf*w/nbufs, y + h/2 + h/2*low/max);
-      cairo_stroke(cr);
-      
-      curr_buf++; 
-    }
-    void OnClick(){}
-};*/
-
 int main() {
-  CairoXWindow X(700, 350);
+  CairoXWindow X(1250, 750);
   static const pa_sample_spec ss = {
     .format = PA_SAMPLE_S16LE,
     .rate = 44100,
     .channels = 2 
   };
   PulseStream *record_stream = new PulseStream(ss, record);
-  const int bufsize = 2048; 
+  const int bufsize = 2048;
+  vector<int16_t> buf;
+  buf.resize(bufsize);	
   const int seconds = 50;
-  const int nbufs = floor(seconds * (double)ss.rate / bufsize);
-  AudioClip clip1(0, 50, X.ww, 250, bufsize);
-  for (int i=0; i<nbufs; i++) {
-    clip1.Record(record_stream);
-    clip1.Draw(X.cr);    
+  //const int nbufs = floor(seconds * (double)ss.rate / bufsize);
+  //AudioClip clip1(0, 100, X.ww, 100, bufsize);
+	WaveformViewer viewer(0, 0, X.ww, X.wh);
+  for (;;) {
+		if (pa_simple_read(record_stream->s, 
+            &buf[0], bufsize*2, 
+            &record_stream->error) < 0)
+        err_n_exit("pa_simple_read failed");
+
+		//clip1.Record(record_stream);
+    //clip1.Draw(X.cr);
+		viewer.SetBuf(&buf[0], bufsize);
+	  viewer.Draw(X.cr);	
     if (XPending(X.display)) {
       XEvent e;
       XNextEvent(X.display, &e);
@@ -246,7 +227,7 @@ int main() {
   
   delete record_stream;
 
-  PulseStream playback_stream(ss, playback);
+  /*PulseStream playback_stream(ss, playback);
   for (;;) {
     for (int i=0; i<nbufs; i++) {
       if (pa_simple_write(playback_stream.s, 
@@ -256,5 +237,5 @@ int main() {
     }
     if (pa_simple_drain(playback_stream.s, &playback_stream.error) < 0)
       err_n_exit("pa_simple_drain failed");
-  }        
+  }*/  
 }
