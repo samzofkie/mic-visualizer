@@ -120,7 +120,7 @@ class Live {
 
 class LiveGlyph : public Glyph, public Live {
   public:
-    LiveGlyph(double _x, double _y, double& _w, double& _h,
+    LiveGlyph(double _x, double _y, double _w, double _h,
         const vector<int16_t>& _buf) :
       Glyph(_x, _y, _w, _h), Live(_buf) {}
 };
@@ -131,17 +131,16 @@ class WaveformViewer : public LiveGlyph {
 	  void Draw(cairo_t *cr) {
 			// Black out behind waveform
       cairo_set_source_rgb(cr, 0, 0, 0); 
-      cairo_rectangle(cr, x, y, w, h);
+      cairo_rectangle(cr, x-1, y, w, h);
       cairo_fill(cr);
-
       // Draw waveform
       cairo_set_source_rgb(cr, 0, 1, 0.5); // Lovely hacker green
       cairo_move_to(cr, x, y + h / 2);
-      for (double i=0; i < w / 2; i++) {
-        int data_index = floor(i * buf.size() / w) * 2;
+      for (double i=0; i<w; i+=2) {
+        int data_index = floor(i * buf.size() / w);
    			int16_t sample = buf[data_index];
-			  double s = sample / pow(2,16) * h;	
-        cairo_line_to(cr, x+i*2, y+s+h/2);
+			  double s = sample / pow(2,16) * h * 5/6;	
+        cairo_line_to(cr, x+i, y+s+h/2);
       }
       cairo_stroke(cr);
 		}
@@ -197,7 +196,7 @@ int main() {
   PulseStream *record_stream = new PulseStream(ss, record);  
   const int bufsize = 2048;
   vector<int16_t> buf(bufsize);
-	WaveformViewer viewer(0, 0, X.ww, X.wh, buf);
+	WaveformViewer viewer(X.ww/3, 0, X.ww/3, 200, buf);
   vector<Glyph*> live_components, static_components;
   live_components.push_back(&viewer);
   for (;;) {
