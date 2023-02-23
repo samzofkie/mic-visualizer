@@ -73,19 +73,30 @@ struct Point {
   double x, y;
 };
 
-class Glyph {
+class Rectangle {
   public:
-    double x, y, &w, &h;
-    Glyph(double x, double y, double& w, double& h)
-      : x(x), y(y), w(w), h(h) {};
-    virtual void Draw(cairo_t *cr) =0;
-    virtual bool Intersects(const Point& p) {
+    double x, y, w, h;
+
+    Rectangle(double _x, double _y, double _w, double _h) :
+      x(_x), y(_y), w(_w), h(_h) {};
+    virtual bool Intersects(const Point p) {
       if (p.x >= x && p.x <= x+w)
         if (p.y >= y && p.y <= y+h)
           return true;
       return false;
     }
+};
+
+class ClickableRectangle : public Rectangle {
+  public:
+    using Rectangle::Rectangle;
     virtual void OnClick() =0;
+};
+
+class Glyph : public Rectangle {
+  public:
+    using Rectangle::Rectangle;
+    virtual void Draw(cairo_t *cr) =0;
 };
 
 class Button : public Glyph {
@@ -103,24 +114,20 @@ class Button : public Glyph {
 
 class Live {
   public:
-    uint8_t *buf;
-    int bufsize;
-    Live(uint8_t *_buf, int _bufsize) :
-    buf(_buf), bufsize(_bufsize) {}
+    const vector<int16_t>& buf;
+    Live(const vector<int16_t>& _buf) : buf(_buf) {}
 };
 
 class LiveGlyph : public Glyph, public Live {
   public:
-    LiveGlyph(double _x, double _y, double _w, double _h,
-        uint8_t *_buf, int _bufsize) :
-      Glyph(_x, _y, _w, _h), Live(_buf, _bufsize) {}
+    LiveGlyph(double _x, double _y, double& _w, double& _h,
+        const vector<int16_t>& _buf) :
+      Glyph(_x, _y, _w, _h), Live(_buf) {}
 };
 
-class WaveformViewer : public Glyph {
+class WaveformViewer : public LiveGlyph {
   public:
-    int16_t *buf;
-		int bufsize;
-		using Glyph::Glyph;
+ 		using LiveGlyph::LiveGlyph;
 	  void Draw(cairo_t *cr) {
 			// Black out behind waveform
       cairo_set_source_rgb(cr, 0, 0, 0); 
@@ -131,18 +138,16 @@ class WaveformViewer : public Glyph {
       cairo_set_source_rgb(cr, 0, 1, 0.5); // Lovely hacker green
       cairo_move_to(cr, x, y + h / 2);
       for (double i=0; i < w / 2; i++) {
-        int data_index = floor(i * bufsize / w) * 2;
+        int data_index = floor(i * buf.size() / w) * 2;
    			int16_t sample = buf[data_index];
-			  double s = sample / pow(2,15) * h;	
+			  double s = sample / pow(2,16) * h;	
         cairo_line_to(cr, x+i*2, y+s+h/2);
       }
       cairo_stroke(cr);
 		}
-	  void OnClick() {}
-		void SetBuf(int16_t *_buf, int _bufsize) {
-			buf = _buf;
-			bufsize = _bufsize;
-		}	
+	  void OnClick() {
+      cout << "Clicked on WaveformViewer" << endl;
+    }	
 };
 
 class AudioClip : public Glyph {
@@ -189,24 +194,24 @@ int main() {
     .rate = 44100,
     .channels = 2 
   };
-  PulseStream *record_stream = new PulseStream(ss, record);
+  PulseStream *record_stream = new PulseStream(ss, record);  
   const int bufsize = 2048;
-  vector<int16_t> buf;
-  buf.resize(bufsize);	
-  const int seconds = 50;
-  //const int nbufs = floor(seconds * (double)ss.rate / bufsize);
-  //AudioClip clip1(0, 100, X.ww, 100, bufsize);
-	WaveformViewer viewer(0, 0, X.ww, X.wh);
+  vector<int16_t> buf(bufsize);
+	WaveformViewer viewer(0, 0, X.ww, X.wh, buf);
+  vector<Glyph*> live_components, static_components;
+  live_components.push_back(&viewer);
   for (;;) {
-		if (pa_simple_read(record_stream->s, 
+		// Read into buf
+    if (pa_simple_read(record_stream->s, 
             &buf[0], bufsize*2, 
             &record_stream->error) < 0)
         err_n_exit("pa_simple_read failed");
-
-		//clip1.Record(record_stream);
-    //clip1.Draw(X.cr);
-		viewer.SetBuf(&buf[0], bufsize);
-	  viewer.Draw(X.cr);	
+	  
+    // Draw live_components
+    for (Glyph* comp : live_components)
+      comp->Draw(X.cr);
+    
+    // Handle X events 
     if (XPending(X.display)) {
       XEvent e;
       XNextEvent(X.display, &e);
@@ -220,6 +225,9 @@ int main() {
           cairo_set_source_rgb(X.cr, 0.5, 0.5, 0.5);
           cairo_rectangle(X.cr, 0, 0, X.ww, X.wh);
           cairo_fill(X.cr);
+          // Draw static components
+          for (Glyph* comp : static_components)
+            comp->Draw(X.cr);
           break;
       }
     }
