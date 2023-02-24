@@ -73,83 +73,73 @@ struct Point {
   double x, y;
 };
 
-class Rectangle {
-  public:
-    double x, y, w, h;
-
-    Rectangle(double _x, double _y, double _w, double _h) :
-      x(_x), y(_y), w(_w), h(_h) {};
-    virtual bool Intersects(const Point p) {
-      if (p.x >= x && p.x <= x+w)
+struct Rectangle {
+  double x, y, w, h;
+  Rectangle(double _x=0, double _y=0, double _w=10, double _h=10) :
+    x(_x), y(_y), w(_w), h(_h) {}
+  Rectangle(const Rectangle& _rect) :
+    x(_rect.x), y(_rect.y), w(_rect.w), h(_rect.h) {}
+  bool Intersects(const Point p) {
+    if (p.x >= x && p.x <= x+w)
         if (p.y >= y && p.y <= y+h)
           return true;
       return false;
+  }
+};
+
+struct ClickableRectangle : public virtual Rectangle {
+  using Rectangle::Rectangle;
+  virtual void OnClick() =0;
+};
+
+struct Glyph : public virtual Rectangle {
+  using Rectangle::Rectangle;
+  Glyph(const Rectangle& _rect) : Rectangle(_rect) {}
+  virtual void Draw(cairo_t*) =0;
+};
+
+struct Button : public ClickableRectangle, public Glyph {
+  using ClickableRectangle::ClickableRectangle;
+  void OnClick() {
+    cout << "click" << endl;
+  }
+  void Draw(cairo_t *cr) {
+    cairo_set_source_rgb(cr, 0.25, 0.25, 0.25);
+    cairo_rectangle(cr, x, y, w, h);
+    cairo_fill(cr);
+  }
+};
+
+struct Live {
+  const vector<int16_t>& buf;
+  Live(const vector<int16_t>& _buf) : buf(_buf) {}
+};
+
+struct WaveformViewer : public ClickableRectangle, public Glyph, public Live {
+  WaveformViewer(const Rectangle& _rect, const vector<int16_t>& _buf) :
+    Glyph(_rect), Live(_buf) {}
+	void Draw(cairo_t *cr) {
+	  // Black out behind waveform
+    cairo_set_source_rgb(cr, 0, 0, 0); 
+    cairo_rectangle(cr, x-1, y, w, h);
+    cairo_fill(cr);
+    // Draw waveform
+    cairo_set_source_rgb(cr, 0, 1, 0.5); // Lovely hacker green
+    cairo_move_to(cr, x, y + h / 2);
+    for (double i=0; i<w; i+=2) {
+      int data_index = floor(i * buf.size() / w);
+   	  int16_t sample = buf[data_index];
+		  double s = sample / pow(2,16) * h * 5/6;	
+      cairo_line_to(cr, x+i, y+s+h/2);
     }
+    cairo_stroke(cr);
+	}
+	void OnClick() {
+    cout << "Clicked on WaveformViewer" << endl;
+  }	
 };
 
-class ClickableRectangle : public Rectangle {
-  public:
-    using Rectangle::Rectangle;
-    virtual void OnClick() =0;
-};
-
-class Glyph : public Rectangle {
-  public:
-    using Rectangle::Rectangle;
-    virtual void Draw(cairo_t *cr) =0;
-};
-
-class Button : public Glyph {
-  public:
-    using Glyph::Glyph;
-    void Draw(cairo_t *cr) {
-      cairo_set_source_rgb(cr, 0.5, 0.5, 0.5);
-      cairo_rectangle(cr, x, y, w, h);
-      cairo_fill(cr);
-    }
-    void OnClick() {
-      cout << "Button click" << endl;
-    }
-};
-
-class Live {
-  public:
-    const vector<int16_t>& buf;
-    Live(const vector<int16_t>& _buf) : buf(_buf) {}
-};
-
-class LiveGlyph : public Glyph, public Live {
-  public:
-    LiveGlyph(double _x, double _y, double _w, double _h,
-        const vector<int16_t>& _buf) :
-      Glyph(_x, _y, _w, _h), Live(_buf) {}
-};
-
-class WaveformViewer : public LiveGlyph {
-  public:
- 		using LiveGlyph::LiveGlyph;
-	  void Draw(cairo_t *cr) {
-			// Black out behind waveform
-      cairo_set_source_rgb(cr, 0, 0, 0); 
-      cairo_rectangle(cr, x-1, y, w, h);
-      cairo_fill(cr);
-      // Draw waveform
-      cairo_set_source_rgb(cr, 0, 1, 0.5); // Lovely hacker green
-      cairo_move_to(cr, x, y + h / 2);
-      for (double i=0; i<w; i+=2) {
-        int data_index = floor(i * buf.size() / w);
-   			int16_t sample = buf[data_index];
-			  double s = sample / pow(2,16) * h * 5/6;	
-        cairo_line_to(cr, x+i, y+s+h/2);
-      }
-      cairo_stroke(cr);
-		}
-	  void OnClick() {
-      cout << "Clicked on WaveformViewer" << endl;
-    }	
-};
-
-class AudioClip : public Glyph {
+/*class AudioClip : public Glyph {
   public:
     int bufsize; 
     vector<int16_t> clip;
@@ -184,7 +174,7 @@ class AudioClip : public Glyph {
             &record_stream->error) < 0)
         err_n_exit("pa_simple_read failed");
   }
-};
+};*/
 
 int main() {
   CairoXWindow X(1250, 750);
@@ -192,18 +182,22 @@ int main() {
     .format = PA_SAMPLE_S16LE,
     .rate = 44100,
     .channels = 2 
-  };
-  PulseStream *record_stream = new PulseStream(ss, record);  
+  }; 
+  PulseStream record_stream(ss, record);
+  vector<ClickableRectangles*> clickable_components;
+  vector<Glyph*> drawable_components;
+  vector<Live*> live_components;
+
   const int bufsize = 2048;
   vector<int16_t> buf(bufsize);
-	WaveformViewer viewer(X.ww/3, 0, X.ww/3, 200, buf);
-  vector<Glyph*> live_components, static_components;
+	WaveformViewer viewer({X.ww/3, 0, X.ww/3, 200}, buf);
   live_components.push_back(&viewer);
+  //bool recording = false;
   for (;;) {
 		// Read into buf
-    if (pa_simple_read(record_stream->s, 
+    if (pa_simple_read(record_stream.s, 
             &buf[0], bufsize*2, 
-            &record_stream->error) < 0)
+            &record_stream.error) < 0)
         err_n_exit("pa_simple_read failed");
 	  
     // Draw live_components
@@ -225,15 +219,14 @@ int main() {
           cairo_rectangle(X.cr, 0, 0, X.ww, X.wh);
           cairo_fill(X.cr);
           // Draw static components
-          for (Glyph* comp : static_components)
-            comp->Draw(X.cr);
+          //for (Glyph* comp : static_components)
+            //comp->Draw(X.cr);
+
           break;
       }
     }
   }
   
-  delete record_stream;
-
   /*PulseStream playback_stream(ss, playback);
   for (;;) {
     for (int i=0; i<nbufs; i++) {
