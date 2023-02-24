@@ -184,13 +184,18 @@ int main() {
     .channels = 2 
   }; 
   PulseStream record_stream(ss, record);
-  vector<ClickableRectangles*> clickable_components;
-  vector<Glyph*> drawable_components;
-  vector<Live*> live_components;
+  vector<ClickableRectangle*> clickable_components;
+  vector<Glyph*> visible_components;
+
+  // Things w/ pointers inlive_components are Lives but also
+  // more importantly Glyphs, since they need to be drawn every cycle.
+  vector<Glyph*> live_components;
 
   const int bufsize = 2048;
   vector<int16_t> buf(bufsize);
 	WaveformViewer viewer({X.ww/3, 0, X.ww/3, 200}, buf);
+  clickable_components.push_back(&viewer);
+  visible_components.push_back(&viewer);
   live_components.push_back(&viewer);
   //bool recording = false;
   for (;;) {
@@ -208,8 +213,14 @@ int main() {
     if (XPending(X.display)) {
       XEvent e;
       XNextEvent(X.display, &e);
+      Point p;
       switch (e.type) {
         case ButtonPress:
+          p = {(double)e.xbutton.x, (double)e.xbutton.y};
+          // call OnClick for clickables
+          for (ClickableRectangle* comp : clickable_components)
+            if (comp->Intersects(p))
+                comp->OnClick();
           break;
         case Expose:
           X.ww = e.xexpose.width;
@@ -219,9 +230,8 @@ int main() {
           cairo_rectangle(X.cr, 0, 0, X.ww, X.wh);
           cairo_fill(X.cr);
           // Draw static components
-          //for (Glyph* comp : static_components)
-            //comp->Draw(X.cr);
-
+          for (Glyph* comp : visible_components)
+            comp->Draw(X.cr);
           break;
       }
     }
