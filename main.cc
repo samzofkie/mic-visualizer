@@ -1,4 +1,5 @@
 #include <vector>
+#include <queue>
 #include <iostream>
 #include <cstring>
 #include <algorithm>
@@ -75,7 +76,7 @@ struct Point {
 
 struct Rectangle {
   double x, y, w, h;
-  Rectangle(double _x=0, double _y=0, double _w=10, double _h=10) :
+  Rectangle(double _x=0, double _y=0, double _w=300, double _h=100) :
     x(_x), y(_y), w(_w), h(_h) {}
   Rectangle(const Rectangle& _rect) :
     x(_rect.x), y(_rect.y), w(_rect.w), h(_rect.h) {}
@@ -94,17 +95,25 @@ struct ClickableRectangle : public virtual Rectangle {
 
 struct Glyph : public virtual Rectangle {
   using Rectangle::Rectangle;
-  Glyph(const Rectangle& _rect) : Rectangle(_rect) {}
   virtual void Draw(cairo_t*) =0;
 };
 
-struct Button : public ClickableRectangle, public Glyph {
-  using ClickableRectangle::ClickableRectangle;
+struct RecordButton : public ClickableRectangle, public Glyph {
+  bool& recording;
+  queue<Glyph*>& redraw_queue;
+  RecordButton(const Rectangle& _rect, bool& _recording,
+      queue<Glyph*>& _redraw_queue) :
+    Rectangle(_rect), recording(_recording), 
+    redraw_queue(_redraw_queue) {}
   void OnClick() {
-    cout << "click" << endl;
+    recording = !recording;
+    redraw_queue.push(this);
   }
   void Draw(cairo_t *cr) {
-    cairo_set_source_rgb(cr, 0.25, 0.25, 0.25);
+    if (recording)
+      cairo_set_source_rgb(cr, 1, 0, 0);
+    else
+      cairo_set_source_rgb(cr, 0.25, 0.25, 0.25);
     cairo_rectangle(cr, x, y, w, h);
     cairo_fill(cr);
   }
@@ -117,7 +126,7 @@ struct Live {
 
 struct WaveformViewer : public ClickableRectangle, public Glyph, public Live {
   WaveformViewer(const Rectangle& _rect, const vector<int16_t>& _buf) :
-    Glyph(_rect), Live(_buf) {}
+    Rectangle(_rect), Live(_buf) {}
 	void Draw(cairo_t *cr) {
 	  // Black out behind waveform
     cairo_set_source_rgb(cr, 0, 0, 0); 
@@ -186,10 +195,10 @@ int main() {
   PulseStream record_stream(ss, record);
   vector<ClickableRectangle*> clickable_components;
   vector<Glyph*> visible_components;
-
   // Things w/ pointers inlive_components are Lives but also
   // more importantly Glyphs, since they need to be drawn every cycle.
   vector<Glyph*> live_components;
+  queue<Glyph*> redraw_queue;
 
   const int bufsize = 2048;
   vector<int16_t> buf(bufsize);
@@ -197,7 +206,12 @@ int main() {
   clickable_components.push_back(&viewer);
   visible_components.push_back(&viewer);
   live_components.push_back(&viewer);
-  //bool recording = false;
+  
+  bool recording = false;
+  RecordButton record_button({10,10,20,20}, recording, redraw_queue);
+  clickable_components.push_back(&record_button);
+  visible_components.push_back(&record_button);
+  
   for (;;) {
 		// Read into buf
     if (pa_simple_read(record_stream.s, 
@@ -208,6 +222,12 @@ int main() {
     // Draw live_components
     for (Glyph* comp : live_components)
       comp->Draw(X.cr);
+
+    // Draw components queued for redraw
+    while (!redraw_queue.empty()) {
+      redraw_queue.front()->Draw(X.cr);
+      redraw_queue.pop();
+    }
     
     // Handle X events 
     if (XPending(X.display)) {
