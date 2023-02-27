@@ -124,7 +124,7 @@ struct Live {
   Live(const vector<int16_t>& _buf) : buf(_buf) {}
 };
 
-struct WaveformViewer : public ClickableRectangle, public Glyph, public Live {
+struct WaveformViewer : public Glyph, public Live {
   WaveformViewer(const Rectangle& _rect, const vector<int16_t>& _buf) :
     Rectangle(_rect), Live(_buf) {}
 	void Draw(cairo_t *cr) {
@@ -142,10 +142,7 @@ struct WaveformViewer : public ClickableRectangle, public Glyph, public Live {
       cairo_line_to(cr, x+i, y+s+h/2);
     }
     cairo_stroke(cr);
-	}
-	void OnClick() {
-    cout << "Clicked on WaveformViewer" << endl;
-  }	
+	}	
 };
 
 /*class AudioClip : public Glyph {
@@ -187,24 +184,24 @@ struct WaveformViewer : public ClickableRectangle, public Glyph, public Live {
 
 int main() {
   CairoXWindow X(1250, 750);
+
+  // Audio stuff
   static const pa_sample_spec ss = {
     .format = PA_SAMPLE_S16LE,
     .rate = 44100,
     .channels = 2 
   }; 
   PulseStream record_stream(ss, record);
-  vector<ClickableRectangle*> clickable_components;
-  vector<Glyph*> visible_components;
-  // Things w/ pointers inlive_components are Lives but also
-  // more importantly Glyphs, since they need to be drawn every cycle.
-  vector<Glyph*> live_components;
-  queue<Glyph*> redraw_queue;
-
   const int bufsize = 2048;
   vector<int16_t> buf(bufsize);
-	WaveformViewer viewer({X.ww/3, 0, X.ww/3, 200}, buf);
-  clickable_components.push_back(&viewer);
-  visible_components.push_back(&viewer);
+  
+  // Organize components
+  vector<Glyph*> live_components; 
+  queue<Glyph*> redraw_queue;
+  vector<ClickableRectangle*> clickable_components;
+  vector<Glyph*> visible_components;
+
+  WaveformViewer viewer({X.ww/3, 0, X.ww/3, 200}, buf);
   live_components.push_back(&viewer);
   
   bool recording = false;
@@ -213,7 +210,7 @@ int main() {
   visible_components.push_back(&record_button);
   
   for (;;) {
-		// Read into buf
+		// Read audio data from PulseAudio into buf
     if (pa_simple_read(record_stream.s, 
             &buf[0], bufsize*2, 
             &record_stream.error) < 0)
@@ -223,7 +220,7 @@ int main() {
     for (Glyph* comp : live_components)
       comp->Draw(X.cr);
 
-    // Draw components queued for redraw
+    // Draw any components queued for redraw
     while (!redraw_queue.empty()) {
       redraw_queue.front()->Draw(X.cr);
       redraw_queue.pop();
@@ -233,13 +230,10 @@ int main() {
     if (XPending(X.display)) {
       XEvent e;
       XNextEvent(X.display, &e);
-      Point p;
       switch (e.type) {
         case ButtonPress:
-          p = {(double)e.xbutton.x, (double)e.xbutton.y};
-          // call OnClick for clickables
           for (ClickableRectangle* comp : clickable_components)
-            if (comp->Intersects(p))
+            if (comp->Intersects({(double)e.xbutton.x, (double)e.xbutton.y}))
                 comp->OnClick();
           break;
         case Expose:
@@ -249,7 +243,7 @@ int main() {
           cairo_set_source_rgb(X.cr, 0.5, 0.5, 0.5);
           cairo_rectangle(X.cr, 0, 0, X.ww, X.wh);
           cairo_fill(X.cr);
-          // Draw static components
+          // Draw visible components
           for (Glyph* comp : visible_components)
             comp->Draw(X.cr);
           break;
