@@ -2,7 +2,8 @@
 #include <queue>
 #include <iostream>
 #include <cstring>
-#include <algorithm>
+//#include <algorithm>
+#include <limits>
 #include <math.h>
 
 #include <X11/Xlib.h>
@@ -145,42 +146,37 @@ struct WaveformViewer : public Glyph, public Live {
 	}	
 };
 
-/*class AudioClip : public Glyph {
+class AudioClip : public Glyph, public Live {
   public:
-    int bufsize; 
     vector<int16_t> clip;
-    int drawn;
-    AudioClip(double _x, double _y, double _w, double _h, int _bufsize) :
-      Glyph(_x, _y, _w, _h), bufsize(_bufsize), 
-      clip(0, bufsize), drawn(0) {}
-    void Draw(cairo_t *cr) {
-      if (drawn >= w)
-        return;
-      cairo_set_source_rgb(cr, 0, 0, 0.5);
-      cairo_rectangle(cr, x+drawn, y, 1, h);
-      cairo_fill(cr);
-      vector<int16_t>::iterator start = clip.begin() + drawn * bufsize,
-	                        end = clip.begin() + (drawn+1) * bufsize;
-      int16_t low = *min_element(start, end);
-      int16_t high = *max_element(start, end);
-      cairo_set_source_rgb(cr, 1, 1, 1);
-      cairo_move_to(cr, x+drawn+0.5, y + h/2 + h/2 * high/pow(2,15));
-      cairo_line_to(cr, x+drawn+0.5, y + h/2 + h/2 * low/pow(2,15));
-      cairo_stroke(cr);
-      drawn++;
+    uint drawn;
+    AudioClip(const Rectangle& _rect, vector<int16_t>& _buf) :
+      Rectangle(_rect), Live(_buf), 
+      clip(buf.size()), drawn(0) {}
+    void Record() {
+      memcpy(&clip.back() - (buf.size()-1), &buf.front(), buf.size());
+      clip.resize(clip.size() + buf.size());
     }
-    void OnClick(){}
-    void Record(PulseStream *record_stream) { 
-      vector<int16_t>::size_type prev_size = clip.size();
-      clip.resize(clip.size() + bufsize); 
-      // We do bufsize * 2 because the PulseAudio API is expecting a uint8_t array,
-      // but our vector is of int16_t, which is twice the size of a uint8_t.
-      if (pa_simple_read(record_stream->s, 
-            &clip[prev_size], bufsize*2, 
-            &record_stream->error) < 0)
-        err_n_exit("pa_simple_read failed");
-  }
-};*/
+    void Draw(cairo_t *cr) {
+      cairo_set_source_rgb(cr, 0, 0, 0.5);
+      cairo_rectangle(cr, x+drawn, y, clip.size() / buf.size() - 1 - drawn, h);
+      cairo_fill(cr);
+      cairo_set_source_rgb(cr, 1, 1, 1);
+      while (drawn < clip.size() / buf.size() - 1) {
+        int16_t low = numeric_limits<int16_t>::max(), 
+                high = numeric_limits<int16_t>::min();
+        for (vector<int16_t>::size_type i=0; i<buf.size(); i++) {
+          int index = drawn * buf.size() + i;
+          high = clip[index] > high ? clip[index] : high;
+          low = clip[index] < low ? clip[index] : low;
+        }
+        cairo_move_to(cr, x+drawn+0.5, y + h/2 + h/2 * high/pow(2,15));
+        cairo_line_to(cr, x+drawn+0.5, y + h/2 + h/2 * low/pow(2,15));
+        cairo_stroke(cr);
+        drawn++;
+      }
+    } 
+};
 
 int main() {
   CairoXWindow X(1250, 750);
@@ -208,6 +204,9 @@ int main() {
   RecordButton record_button({10,10,20,20}, recording, redraw_queue);
   clickable_components.push_back(&record_button);
   visible_components.push_back(&record_button);
+
+  AudioClip clip1({10, 200, 0, 200}, buf);
+  live_components.push_back(&clip1);
   
   for (;;) {
 		// Read audio data from PulseAudio into buf
@@ -215,7 +214,10 @@ int main() {
             &buf[0], bufsize*2, 
             &record_stream.error) < 0)
         err_n_exit("pa_simple_read failed");
-	  
+
+    if (recording)
+      clip1.Record();
+ 
     // Draw live_components
     for (Glyph* comp : live_components)
       comp->Draw(X.cr);
@@ -244,6 +246,7 @@ int main() {
           cairo_rectangle(X.cr, 0, 0, X.ww, X.wh);
           cairo_fill(X.cr);
           // Draw visible components
+          clip1.drawn = 0;
           for (Glyph* comp : visible_components)
             comp->Draw(X.cr);
           break;
