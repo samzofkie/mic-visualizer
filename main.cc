@@ -2,7 +2,6 @@
 #include <queue>
 #include <iostream>
 #include <cstring>
-//#include <algorithm>
 #include <limits>
 #include <math.h>
 
@@ -11,6 +10,7 @@
 #include <cairo.h>
 #include <cairo-xlib.h>
 
+#include <pulse/pulseaudio.h>
 #include <pulse/simple.h>
 
 using namespace std;
@@ -38,7 +38,9 @@ class CairoXWindow {
       window = XCreateSimpleWindow(display, DefaultRootWindow(display),
           0, 0, ww, wh, 0, 0, 0);
       XSelectInput(display, window, 
-          ButtonPressMask | KeyPressMask | ExposureMask); // Nec?
+          ButtonPressMask | ButtonReleaseMask |
+          KeyPressMask | KeyReleaseMask |
+          Button1MotionMask | ExposureMask);
       XMapWindow(display, window);
       surface = cairo_xlib_surface_create(display, window,
           DefaultVisual(display, screen),
@@ -69,6 +71,108 @@ class PulseStream {
         err_n_exit(strcat(err_mess, stream_name));
       }
     } 
+};
+
+struct P {
+  pa_mainloop *mainloop;
+  pa_context *context;
+  int error;
+  pa_sample_spec sample_spec;
+  pa_stream *stream;
+  P() {
+    mainloop = pa_mainloop_new();
+    context = pa_context_new(pa_mainloop_get_api(mainloop), "swag daw");
+    if ((error=pa_context_connect(context, NULL, PA_CONTEXT_NOAUTOSPAWN, NULL)) < 0)
+      err_n_exit("pa_context_connect failed"); 
+
+    int state = 0; 
+    pa_context_set_state_callback(context, pa_context_state_callback, &state);
+
+    while (state==0) {
+      cout << "context aint ready" << endl;
+      pa_mainloop_iterate(mainloop, 1, NULL);
+    }
+    if (state==2)
+      err_n_exit("pa_context_state_callback said it failed");
+
+    sample_spec = {
+      .format = PA_SAMPLE_S16LE,
+      .rate = 44100,
+      .channels = 2 
+    };
+    if (!(stream = pa_stream_new(context, "swag daw stream", &sample_spec, NULL)))
+      err_n_exit("pa_stream_new failed");
+    if((pa_stream_connect_record(stream, NULL, NULL, PA_STREAM_NOFLAGS))!=0)
+      err_n_exit("pa_stream_connect_record failed");
+    
+    state = 0;
+    pa_stream_set_state_callback(stream, pa_stream_state_callback, &state);
+    
+    while (state==0) {
+      cout << "stream aint ready" << endl;
+      pa_mainloop_iterate(mainloop, 1, NULL);
+    }
+    if (state==2)
+      err_n_exit("pa_stream_state_callback said ot failed");
+
+    state = 0;
+    pa_stream_set_read_callback(stream, pa_stream_read_callback, &state);
+
+    const pa_buffer_attr *b = pa_stream_get_buffer_attr(stream); 
+  }
+  
+  void static pa_context_state_callback(pa_context *c, void *userdata) {
+    pa_context_state_t state = pa_context_get_state(c);
+    int *pa_ready = (int*)userdata;
+    switch (state) {
+      case PA_CONTEXT_UNCONNECTED:
+      case PA_CONTEXT_CONNECTING:
+      case PA_CONTEXT_AUTHORIZING:
+      case PA_CONTEXT_SETTING_NAME:
+      default:
+        break;
+      case PA_CONTEXT_FAILED:
+      case PA_CONTEXT_TERMINATED:
+        *pa_ready = 2;
+        break;
+      case PA_CONTEXT_READY:
+        *pa_ready = 1;
+        break;
+    }
+  }
+
+  void static pa_stream_state_callback(pa_stream *s, void *userdata) {
+    int *state = (int*)userdata;
+    switch (pa_stream_get_state(s)) {
+      case PA_STREAM_UNCONNECTED:
+      case PA_STREAM_CREATING:
+      case PA_STREAM_FAILED:
+      default:
+        break;
+      case PA_STREAM_TERMINATED:
+        *state = 2;
+        break;
+      case PA_STREAM_READY:
+        *state = 1;
+        break;
+    }
+  }
+
+  void static pa_stream_read_callback(pa_stream *s, size_t nbytes, void *userdata) {
+    cout << "pa_stream_read_callback got told " << nbytes << endl;
+    size_t b;
+    const void *buf;
+    if ((pa_stream_peek(s, &buf, &b))!=0)
+      err_n_exit("pa_stream_peek failed");
+    cout << b << endl;
+    if ((pa_stream_drop(s))!=0)
+      err_n_exit("pa_stream_drop failed");
+  }
+
+  ~P() {
+    pa_context_disconnect(context);
+    pa_mainloop_free(mainloop);
+  }
 };
 
 struct Point {
@@ -181,13 +285,17 @@ class AudioClip : public Glyph, public Live {
 int main() {
   CairoXWindow X(1250, 750);
 
+  P p;
+
+  pa_mainloop_run(p.mainloop, NULL);
+
   // Audio stuff
-  static const pa_sample_spec ss = {
-    .format = PA_SAMPLE_S16LE,
-    .rate = 44100,
-    .channels = 2 
-  }; 
-  PulseStream record_stream(ss, record);
+  //static const pa_sample_spec ss = {
+  //  .format = PA_SAMPLE_S16LE,
+  //  .rate = 44100,
+  //  .channels = 2 
+  //}; 
+  //PulseStream record_stream(ss, record);
   const int bufsize = 2048;
   vector<int16_t> buf(bufsize);
   
@@ -197,23 +305,23 @@ int main() {
   vector<ClickableRectangle*> clickable_components;
   vector<Glyph*> visible_components;
 
-  WaveformViewer viewer({X.ww/3, 0, X.ww/3, 200}, buf);
+  WaveformViewer viewer({0, 0, X.ww, 100}, buf);
   live_components.push_back(&viewer);
   
   bool recording = false;
-  RecordButton record_button({10,10,20,20}, recording, redraw_queue);
+  RecordButton record_button({5,105,20,20}, recording, redraw_queue);
   clickable_components.push_back(&record_button);
   visible_components.push_back(&record_button);
 
-  AudioClip clip1({10, 200, 0, 200}, buf);
+  AudioClip clip1({10, 130, 0, 100}, buf);
   live_components.push_back(&clip1);
   
   for (;;) {
 		// Read audio data from PulseAudio into buf
-    if (pa_simple_read(record_stream.s, 
-            &buf[0], bufsize*2, 
-            &record_stream.error) < 0)
-        err_n_exit("pa_simple_read failed");
+    //if (pa_simple_read(record_stream.s, 
+    //        &buf[0], bufsize*2, 
+    //        &record_stream.error) < 0)
+    //    err_n_exit("pa_simple_read failed");
 
     if (recording)
       clip1.Record();
@@ -237,6 +345,9 @@ int main() {
           for (ClickableRectangle* comp : clickable_components)
             if (comp->Intersects({(double)e.xbutton.x, (double)e.xbutton.y}))
                 comp->OnClick();
+          break;
+        case MotionNotify:
+          cout << e.xmotion.x << ' ' << e.xmotion.y << endl;
           break;
         case Expose:
           X.ww = e.xexpose.width;
